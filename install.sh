@@ -107,7 +107,9 @@ start_watcher() {
         echo "Watcher: no graphical session here; it will start at your next desktop login."
         return
     fi
-    setsid -f /bin/sh -c "$(watcher_command)"
+    # Detach all three standard streams: the long-lived sh would otherwise hold
+    # this script's stdout open, hanging anything reading it (e.g. `| tee log`).
+    setsid -f /bin/sh -c "$(watcher_command)" </dev/null >/dev/null 2>&1
     sleep 2
     if pgrep -u "$USER" -f "$WATCHER_PROC_RE" >/dev/null; then
         echo "Watcher: running."
