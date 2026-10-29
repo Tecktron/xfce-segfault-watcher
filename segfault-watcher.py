@@ -134,6 +134,12 @@ def si_code_name(signal_name, si_code):
     return str(si_code)
 
 
+def is_chrome_debug_trap(signal_name, si_code, addr):
+    """SIGTRAP + SI_KERNEL + null address is how Chrome self-triggers a debug
+    dump, so it shares SI_KERNEL with the hardware pattern but is harmless."""
+    return signal_name == "SIGTRAP" and si_code == SI_KERNEL and addr == 0
+
+
 def describe_chrome_dump(path):
     """Parse a Crashpad minidump and return
     (signal_name, si_code, si_code_name, addr, verdict)."""
@@ -157,7 +163,7 @@ def describe_chrome_dump(path):
     code_name = si_code_name(signal_name, si_code)
     addr = record.ExceptionAddress
 
-    if signal_name == "SIGTRAP" and si_code == SI_KERNEL and addr == 0:
+    if is_chrome_debug_trap(signal_name, si_code, addr):
         verdict = (
             "Likely Chrome's own intentional diagnostic trap, not memory "
             "corruption (SIGTRAP + SI_KERNEL + null address is how Chrome "
@@ -174,7 +180,10 @@ def describe_chrome_dump(path):
             "abort or crash handler. Not the hardware pattern."
         )
     else:
-        verdict = f"Ordinary software fault (si_code={code_name}) — not the hardware pattern."
+        verdict = (
+            f"Ordinary fault (si_code={code_name}). Rules out a CPU glitch but "
+            "not bad RAM — if these cluster across unrelated programs, test the RAM."
+        )
 
     return signal_name, si_code, code_name, addr, verdict
 
@@ -207,7 +216,8 @@ def watch_chrome_crashes():
                 continue
 
             signal_name, si_code, code_name, addr, verdict = result
-            urgency = "critical" if si_code == SI_KERNEL else "normal"
+            hardware = si_code == SI_KERNEL and not is_chrome_debug_trap(signal_name, si_code, addr)
+            urgency = "critical" if hardware else "normal"
             notify(
                 f"Chrome crash: {signal_name}",
                 f"si_code={code_name}  addr=0x{addr:x}\n{verdict}",
