@@ -38,15 +38,24 @@ EVENTS_LOG = os.path.join(SCRIPT_DIR, "events.log")
 # MinidumpExceptionWriter::InitializeFromSnapshot ->
 #   SetExceptionFlags(exception_snapshot->ExceptionInfo())
 # ExceptionSnapshotLinux::ExceptionInfo() returns signal_code_,
-# which is set from siginfo.code. So ExceptionFlags *is* si_code verbatim.
-SI_CODE_NAMES = {
+# which is set from siginfo.code. So ExceptionFlags *is* si_code verbatim,
+# though stored as a uint32 (see describe_chrome_dump).
+# The positive codes mean different things per signal (SIGILL code 2 is
+# ILL_ILLOPN, not SEGV_ACCERR), so these names only apply to SIGSEGV.
+SEGV_CODE_NAMES = {
     1: "SEGV_MAPERR",
     2: "SEGV_ACCERR",
     3: "SEGV_BNDERR",
     4: "SEGV_PKUERR",
+}
+# "Who sent it" codes, the same for every signal.
+SENDER_CODE_NAMES = {
+    0: "SI_USER",
     128: "SI_KERNEL",
+    -6: "SI_TKILL",
 }
 SI_KERNEL = 128
+SI_TKILL = -6
 
 CHROME_POLL_SECONDS = 5
 
@@ -117,8 +126,17 @@ def coredump_details(pid):
     return "\n".join(details) if details else None
 
 
+def si_code_name(signal_name, si_code):
+    if si_code in SENDER_CODE_NAMES:
+        return SENDER_CODE_NAMES[si_code]
+    if signal_name == "SIGSEGV":
+        return SEGV_CODE_NAMES.get(si_code, str(si_code))
+    return str(si_code)
+
+
 def describe_chrome_dump(path):
-    """Parse a Crashpad minidump and return (signal_name, si_code, addr, verdict)."""
+    """Parse a Crashpad minidump and return
+    (signal_name, si_code, si_code_name, addr, verdict)."""
     prev_level = logging.getLogger().level
     logging.getLogger().setLevel(logging.CRITICAL)  # silence the benign PEB-parse warning
     try:
@@ -131,8 +149,12 @@ def describe_chrome_dump(path):
 
     record = mf.exception.exception_records[0].ExceptionRecord
     signal_name = str(record.ExceptionCode).replace("ExceptionCode.EXCEPTION_", "")
+    if signal_name == "SIGIOT":  # same signal number; SIGABRT is the familiar name
+        signal_name = "SIGABRT"
     si_code = record.ExceptionFlags
-    si_code_name = SI_CODE_NAMES.get(si_code, str(si_code))
+    if si_code >= 2**31:  # stored as uint32, so SI_TKILL (-6) arrives as 4294967290
+        si_code -= 2**32
+    code_name = si_code_name(signal_name, si_code)
     addr = record.ExceptionAddress
 
     if signal_name == "SIGTRAP" and si_code == SI_KERNEL and addr == 0:
@@ -146,10 +168,15 @@ def describe_chrome_dump(path):
             "MATCHES the hardware-fault pattern (SI_KERNEL) — treat this "
             "seriously, not as a routine Chrome bug."
         )
+    elif si_code == SI_TKILL:
+        verdict = (
+            "Self-inflicted (SI_TKILL) — Chrome signaled itself, e.g. an "
+            "abort or crash handler. Not the hardware pattern."
+        )
     else:
-        verdict = f"Ordinary software fault (si_code={si_code_name}) — not the hardware pattern."
+        verdict = f"Ordinary software fault (si_code={code_name}) — not the hardware pattern."
 
-    return signal_name, si_code_name, addr, verdict
+    return signal_name, si_code, code_name, addr, verdict
 
 
 def watch_chrome_crashes():
@@ -179,11 +206,11 @@ def watch_chrome_crashes():
             if result is None:
                 continue
 
-            signal_name, si_code_name, addr, verdict = result
-            urgency = "critical" if si_code_name == "SI_KERNEL" else "normal"
+            signal_name, si_code, code_name, addr, verdict = result
+            urgency = "critical" if si_code == SI_KERNEL else "normal"
             notify(
                 f"Chrome crash: {signal_name}",
-                f"si_code={si_code_name}  addr=0x{addr:x}\n{verdict}",
+                f"si_code={code_name}  addr=0x{addr:x}\n{verdict}",
                 urgency=urgency,
                 persistent=(urgency == "critical"),
             )

@@ -88,4 +88,3 @@ Both flags back up `/etc/default/grub` to `/etc/default/grub.bak-<timestamp>` be
 ## Known limitations
 
 - Chrome crash decoding watches Google Chrome's profile path only, not Chromium's or Brave's.
-- The watcher's own Chrome notifications name `si_code` values using the SIGSEGV table for every signal, so a `SIGILL` code 2 shows as `SEGV_ACCERR`. They also show a self-inflicted abort as `4294967290` instead of `SI_TKILL`. `decode-crash.sh` gets both right, so use it when a label matters.

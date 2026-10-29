@@ -110,18 +110,11 @@ if watcher.MinidumpFile is None:
 r = watcher.describe_chrome_dump(sys.argv[2])
 if r is None:
     sys.exit("dump has no exception record")
-signal_name, si_code_name, addr = r[0], r[1], r[2]
-# describe_chrome_dump names codes with the SIGSEGV table whatever the signal;
-# hand back the raw number so the shell's signal-aware code_name() names it.
-code = {v: k for k, v in watcher.SI_CODE_NAMES.items()}.get(si_code_name, si_code_name)
-code = int(code)
-if code >= 2**31:  # stored as uint32, so SI_TKILL (-6) arrives as 4294967290
-    code -= 2**32
-print(signal_name, code, hex(addr))
+signal_name, si_code, _, addr, _ = r
+print(signal_name, si_code, hex(addr))
 PY
 ) || exit 1
     read -r sig code addr <<<"$result"
-    [[ $sig == SIGIOT ]] && sig=SIGABRT   # same signal number; SIGABRT is the familiar name
     echo "signal=$sig  si_code=$(code_name "$sig" "$code")  addr=$addr"
     echo
     verdict "$sig" "$(code_name "$sig" "$code")" "$addr"
