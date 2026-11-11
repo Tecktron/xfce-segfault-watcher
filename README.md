@@ -29,11 +29,12 @@ Requirements: Ubuntu/Debian with systemd, a desktop that honours XDG autostart, 
 
 ## What the watcher catches
 
-`segfault-watcher.py` follows `journalctl -f` and matches three patterns:
+`segfault-watcher.py` follows `journalctl -f` and matches four patterns:
 
 1. **Kernel Oops / general protection fault.** This is the most serious signal. It fires a critical notification that stays on screen until dismissed.
 2. **`systemd-coredump` "dumped core" events.** The notification includes the signal and the top backtrace frame, taken from `coredumpctl info`.
 3. **Raw kernel `segfault at ...` lines.** This is the fallback for crashes that leave no coredump.
+4. **amdgpu display-engine errors** (`DMCUB error`, `flip_done timed out`). These came right before a hard freeze on 2026-11-10, where the screen locked up while the kernel kept running. They arrive in bursts, so the watcher sends one critical notification and then stays quiet for 10 minutes. If the screen is already frozen you won't see the pop-up, but `events.log` still gets the entry.
 
 A background thread also watches `~/.config/google-chrome/Crash Reports/completed/`. Chrome sandboxes its processes in a way that suppresses coredumps, so its own Crashpad minidumps are the only record of its crashes. The watcher decodes each new dump right away.
 

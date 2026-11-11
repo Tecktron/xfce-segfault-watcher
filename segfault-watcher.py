@@ -71,6 +71,12 @@ SEGFAULT_RE = re.compile(
     r"ip (?P<ip>[0-9a-f]+) sp (?P<sp>[0-9a-f]+) error (?P<err>\d+)"
     r"(?: in (?P<lib>\S+))?"
 )
+# The display engine's firmware (DMCUB) erroring, or a frame flip timing out.
+# Seen together right before the 2026-11-10 hard freeze: the screen stopped
+# updating while the kernel itself kept running.
+DISPLAY_ENGINE_RE = re.compile(
+    r"amdgpu \S+: \[drm\] \*ERROR\* .*(?P<what>DMCUB error|flip_done timed out)"
+)
 
 # How many lines to keep looking for the Comm: follow-up after an Oops line,
 # before giving up and notifying without a process name.
@@ -80,6 +86,10 @@ OOPS_COMM_LOOKAHEAD = 5
 # since a single crash typically logs both a kernel "segfault at" line and a
 # systemd-coredump "dumped core" line.
 DEDUP_WINDOW_SECONDS = 5
+
+# Display-engine errors arrive in bursts (18 DMCUB lines in ~40s during the
+# 2026-11-10 freeze), so notify once per burst rather than once per line.
+DISPLAY_ENGINE_COOLDOWN_SECONDS = 600
 
 
 def notify(summary, body, urgency="normal", persistent=False):
@@ -239,6 +249,7 @@ def main():
 
     pending_oops = None  # (kind, addr, lines_waited)
     recently_notified = {}  # pid -> timestamp
+    last_display_engine_notice = None  # monotonic timestamp
 
     def already_notified(pid):
         now = time.monotonic()
@@ -308,6 +319,26 @@ def main():
                 f"PID {pid} crashed in {lib}\n"
                 f"addr={m.group('addr')} error={m.group('err')}",
                 urgency="normal",
+            )
+            continue
+
+        m = DISPLAY_ENGINE_RE.search(line)
+        if m:
+            now = time.monotonic()
+            if (
+                last_display_engine_notice is not None
+                and now - last_display_engine_notice < DISPLAY_ENGINE_COOLDOWN_SECONDS
+            ):
+                continue
+            last_display_engine_notice = now
+            notify(
+                "GPU display engine error",
+                f"amdgpu logged: {m.group('what')}\n"
+                "This preceded the 2026-11-10 hard freeze. Save your work. "
+                "If the screen freezes, try Ctrl+Alt+F3 before a hard reset.\n"
+                "Details: `journalctl -k -b0 | grep -E 'DMCUB|flip_done'`.",
+                urgency="critical",
+                persistent=True,
             )
             continue
 
